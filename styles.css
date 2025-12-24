@@ -1,0 +1,9 @@
+.gaze-guard-blur {
+  filter: blur(50px) !important;
+  transition: filter !important;
+  cursor: pointer !important;
+}
+
+.gaze-guard-processed {
+  /* Internal marker class - no styles needed */
+}
