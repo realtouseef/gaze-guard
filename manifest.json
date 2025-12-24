@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "gaze-guard",
+  "name": "Gaze Guard",
   "version": "0.0.37",
-  "description": "Blur images with inappropriate content using AI detection",
+  "description": "A privacy-focused Chrome extension that uses on-device AI to detect and blur inappropriate images on web pages.",
   "permissions": [
     "activeTab",
     "storage"

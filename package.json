@@ -1,14 +1,31 @@
 {
   "name": "gaze-guard",
-  "version": "1.0.0",
-  "description": "A Chrome extension that uses AI to detect and blur inappropriate images on web pages.",
+  "version": "0.0.37",
+  "description": "A privacy-focused Chrome extension that uses on-device AI to detect and blur inappropriate images on web pages.",
   "main": "background.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "./build_extension.sh"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "chrome-extension",
+    "ai",
+    "nsfw-detection",
+    "privacy",
+    "image-blurring",
+    "tensorflow-js",
+    "offline",
+    "safety"
+  ],
+  "author": {
+    "name": "Touseef Ur Rehman",
+    "email": "touseefibnkhalil@gmail.com",
+    "url": "https://github.com/realtouseef"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/realtouseef/gaze-guard"
+  },
+  "license": "MIT",
   "devDependencies": {
     "sharp": "^0.34.5"
   },
