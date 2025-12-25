@@ -1,3 +1,8 @@
+.gaze-guard-pending {
+  filter: blur(50px) !important;
+  transition: filter !important;
+}
+
 .gaze-guard-blur {
   filter: blur(50px) !important;
   transition: filter !important;

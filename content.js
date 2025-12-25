@@ -6,6 +6,7 @@ let isAnalyzing = false;
 let backendReady = false;
 let scanIntervalId = null;
 let intersectionObserver = null;
+let domObserver = null;
 let isProcessing = false;
 let queueProcessingTimeout = null;
 let persistentVerdicts = {}; // Cache from storage
@@ -88,16 +89,58 @@ function getElementKey(element) {
 
 function isRenderable(element) {
   if (element.tagName === 'IMG') {
-    // If image is not loaded yet, give it a chance
-    if (!element.complete && element.src) return true;
-    
+    if (!element.complete && (element.currentSrc || element.src)) return true;
+
     const w = element.naturalWidth || element.width || 0;
     const h = element.naturalHeight || element.height || 0;
     return w >= 16 && h >= 16;
   }
-  // For background images, check client dimensions
   const rect = element.getBoundingClientRect();
   return rect.width >= 16 && rect.height >= 16;
+}
+
+function markPending(element) {
+  if (!element || !element.isConnected) return;
+  if (!settings.enabled) return;
+  if (element.classList.contains('gaze-guard-blur')) return;
+
+  const key = getElementKey(element);
+  if (key && srcVerdicts.has(key) && srcVerdicts.get(key) === false) return;
+
+  element.classList.add('gaze-guard-pending');
+}
+
+function clearPending(element) {
+  if (!element || !element.isConnected) return;
+  element.classList.remove('gaze-guard-pending');
+}
+
+function stopAll() {
+  if (scanIntervalId) {
+    clearInterval(scanIntervalId);
+    scanIntervalId = null;
+  }
+
+  if (queueProcessingTimeout) {
+    clearTimeout(queueProcessingTimeout);
+    queueProcessingTimeout = null;
+  }
+
+  analysisQueue.length = 0;
+  isAnalyzing = false;
+  isProcessing = false;
+
+  if (intersectionObserver) {
+    intersectionObserver.disconnect();
+    intersectionObserver = null;
+  }
+
+  if (domObserver) {
+    domObserver.disconnect();
+    domObserver = null;
+  }
+
+  document.querySelectorAll('.gaze-guard-blur, .gaze-guard-pending').forEach(el => clearBlur(el));
 }
 
 function enqueueImage(element) {
@@ -121,10 +164,11 @@ function enqueueImage(element) {
 
 function clearBlur(img) {
   if (!img || !img.isConnected) return;
-  
+
   img.classList.remove('gaze-guard-blur');
+  img.classList.remove('gaze-guard-pending');
   img.title = '';
-  
+
   if (img.parentElement) {
     const overlay = img.parentElement.querySelector('.gaze-guard-overlay');
     if (overlay) overlay.remove();
@@ -240,8 +284,11 @@ function processQueue() {
 
         await Promise.all(batch.map(async (element) => {
           if (!element || !element.isConnected) return;
-          if (!isRenderable(element)) return;
-          
+          if (!isRenderable(element)) {
+            clearPending(element);
+            return;
+          }
+
           const key = getElementKey(element);
           if (key && srcVerdicts.has(key)) {
             const hasInappropriateContentCached = srcVerdicts.get(key);
@@ -327,8 +374,8 @@ function processQueue() {
 
 function blurImage(img) {
   if (!img || !img.isConnected) return;
-  
-  // Just add the blur class
+
+  img.classList.remove('gaze-guard-pending');
   img.classList.add('gaze-guard-blur');
   img.title = 'Click to unblur';
   
@@ -407,12 +454,16 @@ function findAllImages(root) {
 }
 
 function scanImagesOnce() {
-  const elements = findAllImages(document.body);
+  const root = document.body || document.documentElement;
+  if (!root) return;
+
+  const elements = findAllImages(root);
   if (!elements.length) return;
+
   ensureIntersectionObserver();
   elements.forEach(el => {
     if (!el.isConnected) return;
-    
+
     const key = getElementKey(el);
     if (key && srcVerdicts.has(key)) {
       const hasInappropriateContentCached = srcVerdicts.get(key);
@@ -420,7 +471,8 @@ function scanImagesOnce() {
       else clearBlur(el);
       return;
     }
-    
+
+    markPending(el);
     intersectionObserver.observe(el);
   });
 }
@@ -436,29 +488,30 @@ function startScanning() {
 function observeDOM() {
   if (!settings.enabled) return;
 
-  const observer = new MutationObserver(mutations => {
-    // Throttle mutation processing
+  if (domObserver) domObserver.disconnect();
+
+  domObserver = new MutationObserver(mutations => {
     if (window.gazeGuardMutationTimeout) {
       clearTimeout(window.gazeGuardMutationTimeout);
     }
-    
+
     window.gazeGuardMutationTimeout = setTimeout(() => {
       mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
-          if (node.nodeType === 1) { // ELEMENT_NODE
-             // Traverse the entire added node tree to find all images, including in shadow DOM
-             const imagesInNode = findAllImages(node);
-             imagesInNode.forEach(img => {
-                ensureIntersectionObserver();
-                intersectionObserver.observe(img);
-             });
+          if (node.nodeType === 1) {
+            const imagesInNode = findAllImages(node);
+            imagesInNode.forEach(img => {
+              ensureIntersectionObserver();
+              markPending(img);
+              intersectionObserver.observe(img);
+            });
           }
         });
       });
-    }, 100); // 100ms throttling - relaxed for performance
+    }, 100);
   });
-  
-  observer.observe(document.documentElement || document.body, {
+
+  domObserver.observe(document.documentElement || document.body, {
     childList: true,
     subtree: true
   });
@@ -479,16 +532,26 @@ function loadSettings(callback) {
 }
 
 function start() {
+  startScanning();
+  observeDOM();
+  loadNSFWModel();
+
   loadSettings(() => {
     const hostname = location.hostname;
-    if (!settings.enabled) return;
-    if (Array.isArray(settings.disabledDomains) && settings.disabledDomains.includes(hostname)) return;
-    
-    // Start model loading immediately
-    loadNSFWModel();
-    
+
+    if (!settings.enabled) {
+      stopAll();
+      return;
+    }
+
+    if (Array.isArray(settings.disabledDomains) && settings.disabledDomains.includes(hostname)) {
+      stopAll();
+      return;
+    }
+
     startScanning();
     observeDOM();
+    loadNSFWModel();
   });
 }
 
