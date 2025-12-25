@@ -1,12 +1,30 @@
-.gaze-guard-pending {
+.gaze-guard-pre-blur,
+.gaze-guard-blur {
   filter: blur(50px) !important;
   transition: filter !important;
 }
 
+.gaze-guard-pre-blur {
+  animation: gaze-guard-pre-blur 7000ms ease-in-out forwards !important;
+}
+
+@keyframes gaze-guard-pre-blur {
+  0% {
+    filter: blur(50px) !important;
+  }
+  95% {
+    filter: blur(50px) !important;
+  }
+  100% {
+    filter: blur(0) !important;
+  }
+}
+
 .gaze-guard-blur {
-  filter: blur(50px) !important;
-  transition: filter !important;
   cursor: pointer !important;
+}
+
+.gaze-guard-pending {
 }
 
 .gaze-guard-processed {

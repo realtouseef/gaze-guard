@@ -108,11 +108,13 @@ function markPending(element) {
   if (key && srcVerdicts.has(key) && srcVerdicts.get(key) === false) return;
 
   element.classList.add('gaze-guard-pending');
+  element.classList.add('gaze-guard-pre-blur');
 }
 
 function clearPending(element) {
   if (!element || !element.isConnected) return;
   element.classList.remove('gaze-guard-pending');
+  element.classList.remove('gaze-guard-pre-blur');
 }
 
 function stopAll() {
@@ -140,7 +142,7 @@ function stopAll() {
     domObserver = null;
   }
 
-  document.querySelectorAll('.gaze-guard-blur, .gaze-guard-pending').forEach(el => clearBlur(el));
+  document.querySelectorAll('.gaze-guard-blur, .gaze-guard-pre-blur, .gaze-guard-pending').forEach(el => clearBlur(el));
 }
 
 function enqueueImage(element) {
@@ -167,6 +169,7 @@ function clearBlur(img) {
 
   img.classList.remove('gaze-guard-blur');
   img.classList.remove('gaze-guard-pending');
+  img.classList.remove('gaze-guard-pre-blur');
   img.title = '';
 
   if (img.parentElement) {
@@ -376,6 +379,7 @@ function blurImage(img) {
   if (!img || !img.isConnected) return;
 
   img.classList.remove('gaze-guard-pending');
+  img.classList.remove('gaze-guard-pre-blur');
   img.classList.add('gaze-guard-blur');
   img.title = 'Click to unblur';
   
@@ -501,6 +505,7 @@ function observeDOM() {
           if (node.nodeType === 1) {
             const imagesInNode = findAllImages(node);
             imagesInNode.forEach(img => {
+              img.classList.add('gaze-guard-pre-blur');
               ensureIntersectionObserver();
               markPending(img);
               intersectionObserver.observe(img);
@@ -532,6 +537,12 @@ function loadSettings(callback) {
 }
 
 function start() {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      startScanning();
+    }, { once: true });
+  }
+
   startScanning();
   observeDOM();
   loadNSFWModel();
