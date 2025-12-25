@@ -1,4 +1,4 @@
-# Gaze Guard
+# Gaze Guard -- AI Image Blur Extension
 
 A Chrome extension that uses AI to detect and blur inappropriate images on web pages. Automatically blurs images with 50% or higher probability of containing Porn, Hentai, or Sexy content
 
