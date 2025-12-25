@@ -8,52 +8,39 @@
 <body>
   <div class="popup-container">
     <div class="header">
-      <h1>gaze-guard</h1>
-      <p>AI-powered content filtering</p>
+      <h1>Settings</h1>
     </div>
-    
+
+    <div class="protection-banner">
+      Protection always on
+    </div>
+
     <div class="settings">
       <div class="setting-item">
-        <label class="toggle-label">
-          <input type="checkbox" id="enabled" class="toggle-input">
-          <span class="toggle-slider"></span>
-          <span class="setting-text">Enable protection</span>
-        </label>
+        <div class="setting-row">
+          <span class="setting-title">Protection</span>
+          <span class="setting-state">Always protecting</span>
+        </div>
       </div>
-      
-      <!-- <div class="setting-item">
-        <label class="toggle-label">
-          <input type="checkbox" id="disable-domain" class="toggle-input">
-          <span class="toggle-slider"></span>
-          <span class="setting-text">Disable on this site</span>
-        </label>
-      </div> -->
-      
+
       <div class="setting-item">
-        <label for="threshold">Sensitivity threshold:</label>
-        <input type="range" id="threshold" min="0.1" max="0.9" step="0.1" value="0.5">
-        <span id="threshold-value">50%</span>
+        <label for="threshold">Sensitivity</label>
+        <div class="slider-row">
+          <input type="range" id="threshold" min="0.1" max="0.9" step="0.1" value="0.5">
+          <span id="threshold-value">50%</span>
+        </div>
       </div>
-      
+
       <div class="setting-item">
-        <label>Categories to blur:</label>
-        <div class="categories">
-          <label class="checkbox-label">
-            <input type="checkbox" id="category-porn" checked>
-            <span>Porn</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" id="category-hentai" checked>
-            <span>Hentai</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" id="category-sexy" checked>
-            <span>Sexy</span>
-          </label>
+        <label>Categories being blurred</label>
+        <div class="categories-list">
+          <span class="category-pill">Porn</span>
+          <span class="category-pill">Hentai</span>
+          <span class="category-pill">Sexy</span>
         </div>
       </div>
     </div>
-    
+
     <div class="footer">
       <button id="save-btn" class="btn btn-primary">Save Settings</button>
       <div id="status" class="status"></div>
