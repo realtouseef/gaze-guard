@@ -44,16 +44,10 @@ async function ensureTfReady() {
   if (typeof tf !== 'undefined') {
     if (typeof tf.enableProdMode === 'function') tf.enableProdMode();
     try {
-      if (typeof tf.getBackend === 'function' && tf.getBackend() !== 'webgl' && typeof tf.setBackend === 'function') {
-        await tf.setBackend('webgl');
+      if (typeof tf.getBackend === 'function' && tf.getBackend() !== 'cpu' && typeof tf.setBackend === 'function') {
+        await tf.setBackend('cpu');
       }
-    } catch {
-      try {
-        if (typeof tf.getBackend === 'function' && tf.getBackend() !== 'cpu' && typeof tf.setBackend === 'function') {
-          await tf.setBackend('cpu');
-        }
-      } catch {}
-    }
+    } catch {}
   }
   backendReady = true;
 }
@@ -99,10 +93,36 @@ function isRenderable(element) {
   return rect.width >= 16 && rect.height >= 16;
 }
 
+function isSvgLikeElement(element) {
+  if (!element || element.nodeType !== 1) return false;
+  if (element.tagName === 'IMG') {
+    const src = element.currentSrc || element.src || '';
+    if (!src) return false;
+    if (/\.svg(\?|$)/i.test(src)) return true;
+    if (src.startsWith('data:image/svg+xml')) return true;
+  }
+  const style = window.getComputedStyle(element);
+  const bgImage = style && style.backgroundImage;
+  if (bgImage && bgImage !== 'none') {
+    const match = bgImage.match(/url\(['"]?(.*?)['"]?\)/);
+    if (match) {
+      const url = match[1];
+      if (/\.svg(\?|$)/i.test(url)) return true;
+      if (url.startsWith('data:image/svg+xml')) return true;
+    }
+  }
+  return false;
+}
+
 function markPending(element) {
   if (!element || !element.isConnected) return;
   if (!settings.enabled) return;
   if (element.classList.contains('gaze-guard-blur')) return;
+
+  if (isSvgLikeElement(element)) {
+    clearBlur(element);
+    return;
+  }
 
   const key = getElementKey(element);
   if (key && srcVerdicts.has(key) && srcVerdicts.get(key) === false) return;
@@ -151,6 +171,16 @@ function enqueueImage(element) {
     return;
   }
   if (!element || !element.isConnected) return;
+
+   if (isSvgLikeElement(element)) {
+     clearBlur(element);
+     const keySvg = getElementKey(element);
+     if (keySvg) {
+       srcVerdicts.set(keySvg, false);
+       saveVerdict(keySvg, false);
+     }
+     return;
+   }
   
   const key = getElementKey(element);
   if (key && srcVerdicts.has(key)) {
@@ -230,8 +260,7 @@ function loadImageFromElement(element) {
         return;
       }
 
-      // Handle data URIs specifically
-      if (src.startsWith('data:')) {
+      if (src.startsWith('data:') || src.startsWith('blob:')) {
         img.src = src;
         return;
       }
@@ -242,21 +271,19 @@ function loadImageFromElement(element) {
          return;
       }
 
-      // Try loading with CORS first
       img.onload = handleLoad;
       img.onerror = () => {
-         // If direct load fails (likely CORS), try fetching via background script
-         chrome.runtime.sendMessage({ action: 'fetchImage', url: src }, (response) => {
-           if (response && response.dataUri) {
-             img.onload = handleLoad; // Re-attach for data URI load
-             img.onerror = () => reject(new Error('Image load failed even with background fetch'));
-             img.src = response.dataUri;
-           } else {
-             reject(new Error('Image load failed and background fetch failed'));
-           }
-         });
+        chrome.runtime.sendMessage({ action: 'fetchImage', url: src }, (response) => {
+          if (response && response.dataUri) {
+            img.onload = handleLoad;
+            img.onerror = () => reject(new Error('Image load failed even with background fetch'));
+            img.src = response.dataUri;
+          } else {
+            reject(new Error('Image load failed and background fetch failed'));
+          }
+        });
       };
-      
+
       img.src = src;
     } catch (e) {
       reject(e);
@@ -289,6 +316,16 @@ function processQueue() {
           if (!element || !element.isConnected) return;
           if (!isRenderable(element)) {
             clearPending(element);
+            return;
+          }
+
+          if (isSvgLikeElement(element)) {
+            clearBlur(element);
+            const svgKey = getElementKey(element);
+            if (svgKey) {
+              srcVerdicts.set(svgKey, false);
+              saveVerdict(svgKey, false);
+            }
             return;
           }
 
@@ -341,6 +378,10 @@ function processQueue() {
             }
             // On error (CORS, timeout, etc), we fail open (don't blur)
             clearBlur(element);
+            if (key) {
+              srcVerdicts.set(key, false);
+              saveVerdict(key, false);
+            }
           }
         }));
 
@@ -377,6 +418,16 @@ function processQueue() {
 
 function blurImage(img) {
   if (!img || !img.isConnected) return;
+
+  if (isSvgLikeElement(img)) {
+    clearBlur(img);
+    const svgKey = getElementKey(img);
+    if (svgKey) {
+      srcVerdicts.set(svgKey, false);
+      saveVerdict(svgKey, false);
+    }
+    return;
+  }
 
   img.classList.remove('gaze-guard-pending');
   img.classList.remove('gaze-guard-pre-blur');
@@ -444,11 +495,13 @@ function findAllImages(root) {
     if (node.nodeType !== 1) return; // Ensure it is an element node
     
     if (node.tagName === 'IMG') {
+      if (isSvgLikeElement(node)) return;
       elements.push(node);
     } else {
       // Check computed style for background images
       const style = window.getComputedStyle(node);
       if (style.backgroundImage && style.backgroundImage !== 'none') {
+        if (isSvgLikeElement(node)) return;
         elements.push(node);
       }
     }
@@ -460,6 +513,11 @@ function findAllImages(root) {
 function scanImagesOnce() {
   const root = document.body || document.documentElement;
   if (!root) return;
+
+  if (isPdfEnvironment()) {
+    stopAll();
+    return;
+  }
 
   const elements = findAllImages(root);
   if (!elements.length) return;
@@ -495,6 +553,10 @@ function observeDOM() {
   if (domObserver) domObserver.disconnect();
 
   domObserver = new MutationObserver(mutations => {
+    if (isPdfEnvironment()) {
+      stopAll();
+      return;
+    }
     if (window.gazeGuardMutationTimeout) {
       clearTimeout(window.gazeGuardMutationTimeout);
     }
@@ -505,7 +567,6 @@ function observeDOM() {
           if (node.nodeType === 1) {
             const imagesInNode = findAllImages(node);
             imagesInNode.forEach(img => {
-              img.classList.add('gaze-guard-pre-blur');
               ensureIntersectionObserver();
               markPending(img);
               intersectionObserver.observe(img);
@@ -520,6 +581,20 @@ function observeDOM() {
     childList: true,
     subtree: true
   });
+}
+
+function isPdfEnvironment() {
+  try {
+    const href = (location && location.href) || '';
+    const loweredHref = href.toLowerCase();
+    if (loweredHref.endsWith('.pdf') || loweredHref.includes('.pdf?')) return true;
+    if (document.contentType === 'application/pdf') return true;
+    const body = document.body;
+    if (body && body.classList && body.classList.contains('pdf-viewer')) return true;
+    if (document.querySelector('embed[type="application/pdf"], object[type="application/pdf"]')) return true;
+    if (document.querySelector('iframe[src$=".pdf"], iframe[src*=".pdf?"]')) return true;
+  } catch {}
+  return false;
 }
 
 function loadSettings(callback) {
@@ -537,6 +612,8 @@ function loadSettings(callback) {
 }
 
 function start() {
+  if (isPdfEnvironment()) return;
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       startScanning();

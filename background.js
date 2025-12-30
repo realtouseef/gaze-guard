@@ -26,6 +26,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     fetch(request.url)
       .then(response => response.blob())
       .then(blob => {
+        if (!blob.type || !blob.type.startsWith('image/')) {
+          sendResponse({ error: 'Non-image content' });
+          return;
+        }
         const reader = new FileReader();
         reader.onloadend = () => {
           sendResponse({ dataUri: reader.result });
