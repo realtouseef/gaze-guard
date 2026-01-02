@@ -100,9 +100,11 @@ function isSvgLikeElement(element) {
     if (!src) return false;
     if (/\.svg(\?|$)/i.test(src)) return true;
     if (src.startsWith('data:image/svg+xml')) return true;
+    return false;
   }
-  const style = window.getComputedStyle(element);
-  const bgImage = style && style.backgroundImage;
+  
+  // Optimization: Use inline style check instead of getComputedStyle
+  const bgImage = element.style.backgroundImage;
   if (bgImage && bgImage !== 'none') {
     const match = bgImage.match(/url\(['"]?(.*?)['"]?\)/);
     if (match) {
@@ -394,13 +396,8 @@ function processQueue() {
       }
       
       // Start cleanup interval
-      if (!window.gazeGuardCleanupInterval) {
-        window.gazeGuardCleanupInterval = setInterval(() => {
-          if (typeof tf !== 'undefined' && tf.memory().numTensors > 100) {
-            tf.disposeVariables();
-          }
-        }, 10000);
-      }
+      // Removed dangerous tf.disposeVariables() call which was likely wiping model weights.
+      // nsfwjs handles tensor cleanup internally.
     } catch (error) {
       console.error('Error in processQueue:', error);
     } finally { 
@@ -451,61 +448,69 @@ function blurImage(img) {
   }
 }
 
-function traverseShadowRoot(node, callback) {
-  if (!node) return;
-  
-  // Process the node itself
-  callback(node);
-  
-  // Traverse shadow root if present - Handle open and closed shadow roots if accessible
-  if (node.shadowRoot) {
-    traverseShadowRoot(node.shadowRoot, callback);
-  }
-  
-  // Handle iframes (friendly frames)
-  if (node.tagName === 'IFRAME') {
-    try {
-      // Try to access contentDocument. If it fails (cross-origin), it will throw or return null/undefined.
-      const doc = node.contentDocument;
-      if (doc && doc.body) {
-        // Traverse the iframe's body as if it were part of our DOM
-        // This allows us to process friendly iframes in the SAME context, saving resources
-        traverseShadowRoot(doc.body, callback);
-      }
-    } catch (e) {
-      // Cross-origin or restricted iframe - ignore, let the content script inside handle it
-    }
-  }
-
-  // Traverse children
-  // Use children for elements, childNodes for all nodes including text/comments (which we don't need)
-  // Recursively check all descendants
-  const children = node.children || node.childNodes;
-  if (children) {
-    for (let i = 0; i < children.length; i++) {
-      traverseShadowRoot(children[i], callback);
-    }
-  }
-}
-
 function findAllImages(root) {
   const elements = [];
   
-  traverseShadowRoot(root, (node) => {
-    if (node.nodeType !== 1) return; // Ensure it is an element node
-    
-    if (node.tagName === 'IMG') {
-      if (isSvgLikeElement(node)) return;
-      elements.push(node);
-    } else {
-      // Check computed style for background images
-      const style = window.getComputedStyle(node);
-      if (style.backgroundImage && style.backgroundImage !== 'none') {
-        if (isSvgLikeElement(node)) return;
-        elements.push(node);
+  // Helper to process a container (Document, ShadowRoot, or Element)
+  const scanContainer = (container) => {
+    // 1. Fast path: Find all IMG tags using native querySelectorAll
+    // This is significantly faster than manual tree traversal
+    const imgs = container.querySelectorAll('img');
+    imgs.forEach(img => {
+      if (!isSvgLikeElement(img)) elements.push(img);
+    });
+
+    // 2. Find elements that might have shadow roots or inline background images
+    // We scan all elements but avoid getComputedStyle which causes reflows
+    const all = container.querySelectorAll('*');
+    all.forEach(el => {
+      // Handle Shadow DOM
+      if (el.shadowRoot) {
+        scanContainer(el.shadowRoot);
       }
+      
+      // Handle Iframes
+      if (el.tagName === 'IFRAME') {
+        try {
+          const doc = el.contentDocument;
+          if (doc && doc.body) {
+            scanContainer(doc.body);
+          }
+        } catch (e) {
+          // Cross-origin iframe, ignore
+        }
+      }
+
+      // 3. Optimized Background Image Check
+      // Only check INLINE styles. checking getComputedStyle on every element is too expensive.
+      // This trades off some detection capability (CSS class backgrounds) for massive performance gains.
+      if (el.tagName !== 'IMG' && el.style && el.style.backgroundImage && el.style.backgroundImage !== 'none') {
+        if (!isSvgLikeElement(el)) elements.push(el);
+      }
+    });
+  };
+
+  // If root itself is an element, check it first
+  if (root.nodeType === 1) { // ELEMENT_NODE
+    if (root.tagName === 'IMG' && !isSvgLikeElement(root)) {
+      elements.push(root);
+    } else if (root.style && root.style.backgroundImage && root.style.backgroundImage !== 'none' && !isSvgLikeElement(root)) {
+      elements.push(root);
     }
-  });
+    
+    if (root.shadowRoot) scanContainer(root.shadowRoot);
+    if (root.tagName === 'IFRAME') {
+       try {
+         const doc = root.contentDocument;
+         if (doc && doc.body) scanContainer(doc.body);
+       } catch(e) {}
+    }
+  }
+
+  // Scan descendants
+  // If root is document or shadow root, this is the main entry
+  // If root is element, we already checked it, now check children
+  scanContainer(root);
   
   return elements;
 }
@@ -541,10 +546,8 @@ function scanImagesOnce() {
 
 function startScanning() {
   scanImagesOnce();
-  if (!scanIntervalId) {
-    // Reduced frequency to avoid main thread blocking - MutationObserver handles immediate updates
-    scanIntervalId = setInterval(scanImagesOnce, 2000);
-  }
+  // Removed aggressive interval scanning to improve performance.
+  // MutationObserver handles dynamic content updates.
 }
 
 function observeDOM() {
