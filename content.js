@@ -43,11 +43,8 @@ async function ensureTfReady() {
   if (backendReady) return;
   if (typeof tf !== 'undefined') {
     if (typeof tf.enableProdMode === 'function') tf.enableProdMode();
-    try {
-      if (typeof tf.getBackend === 'function' && tf.getBackend() !== 'cpu' && typeof tf.setBackend === 'function') {
-        await tf.setBackend('cpu');
-      }
-    } catch {}
+    // Optimization: Allow tfjs to pick the best backend (webgl, wasm, etc)
+    // forcing 'cpu' is too slow for main thread.
   }
   backendReady = true;
 }
@@ -66,7 +63,8 @@ function getElementKey(element) {
   }
   
   // Check computed style for background image if inline style is not present or empty
-  const bgImage = element.style.backgroundImage || window.getComputedStyle(element).backgroundImage;
+  // Optimization: AVOID getComputedStyle as it causes reflows. Only check inline styles.
+  const bgImage = element.style.backgroundImage;
   
   if (bgImage && bgImage !== 'none') {
     const match = bgImage.match(/url\(['"]?(.*?)['"]?\)/);
@@ -85,8 +83,9 @@ function isRenderable(element) {
   if (element.tagName === 'IMG') {
     if (!element.complete && (element.currentSrc || element.src)) return true;
 
-    const w = element.naturalWidth || element.width || 0;
-    const h = element.naturalHeight || element.height || 0;
+    // Optimization: Use naturalWidth only. Accessing element.width forces reflow.
+    const w = element.naturalWidth || 0;
+    const h = element.naturalHeight || 0;
     return w >= 16 && h >= 16;
   }
   const rect = element.getBoundingClientRect();
@@ -454,40 +453,34 @@ function findAllImages(root) {
   // Helper to process a container (Document, ShadowRoot, or Element)
   const scanContainer = (container) => {
     // 1. Fast path: Find all IMG tags using native querySelectorAll
-    // This is significantly faster than manual tree traversal
     const imgs = container.querySelectorAll('img');
     imgs.forEach(img => {
       if (!isSvgLikeElement(img)) elements.push(img);
     });
 
-    // 2. Find elements that might have shadow roots or inline background images
-    // We scan all elements but avoid getComputedStyle which causes reflows
-    const all = container.querySelectorAll('*');
-    all.forEach(el => {
-      // Handle Shadow DOM
-      if (el.shadowRoot) {
-        scanContainer(el.shadowRoot);
-      }
-      
-      // Handle Iframes
-      if (el.tagName === 'IFRAME') {
-        try {
-          const doc = el.contentDocument;
-          if (doc && doc.body) {
-            scanContainer(doc.body);
-          }
-        } catch (e) {
-          // Cross-origin iframe, ignore
+    // 2. Optimized Background Image Check & Shadow DOM
+    // We used to scan '*' but that is too expensive (O(N) on all DOM nodes).
+    // Instead, we only check elements that are likely to have background images or shadow roots if possible.
+    // For now, to ensure "native" smoothness, we SKIP the aggressive '*' scan.
+    // We can rely on specific checks or just accept that non-IMG tags with background images might be missed
+    // unless they are explicitly handled or we find a cheaper way.
+    
+    // If we MUST find shadow roots, we can try a TreeWalker, but even that is heavy.
+    // Compromise: Only scan for IFRAMEs to handle nested content, and skip the generic '*' scan.
+    const iframes = container.querySelectorAll('iframe');
+    iframes.forEach(el => {
+      try {
+        const doc = el.contentDocument;
+        if (doc && doc.body) {
+          scanContainer(doc.body);
         }
-      }
-
-      // 3. Optimized Background Image Check
-      // Only check INLINE styles. checking getComputedStyle on every element is too expensive.
-      // This trades off some detection capability (CSS class backgrounds) for massive performance gains.
-      if (el.tagName !== 'IMG' && el.style && el.style.backgroundImage && el.style.backgroundImage !== 'none') {
-        if (!isSvgLikeElement(el)) elements.push(el);
+      } catch (e) {
+        // Cross-origin iframe, ignore
       }
     });
+
+    // Note: We are temporarily disabling deep Shadow DOM scanning and generic background image scanning
+    // via querySelectorAll('*') to restore browser performance.
   };
 
   // If root itself is an element, check it first
@@ -508,8 +501,6 @@ function findAllImages(root) {
   }
 
   // Scan descendants
-  // If root is document or shadow root, this is the main entry
-  // If root is element, we already checked it, now check children
   scanContainer(root);
   
   return elements;
