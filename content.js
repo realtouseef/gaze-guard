@@ -18,15 +18,19 @@ const NUDE_CLASSES = [2, 3, 4, 6, 14]; // Exposed parts (Buttocks, Breast, Genit
 const SEXY_CLASSES = [0, 5, 13, 15, 16, 17]; // Covered parts/Suggestive (Belly, Covered Genitalia/Breast/Buttocks)
 
 // Load persistent cache immediately
-chrome.storage.local.get(['imageVerdicts'], (result) => {
-  if (result.imageVerdicts) {
-    persistentVerdicts = result.imageVerdicts;
-    // Populate Map for fast lookup
-    Object.keys(persistentVerdicts).forEach(key => {
-      srcVerdicts.set(key, persistentVerdicts[key]);
-    });
-  }
-});
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get(['imageVerdicts'], (result) => {
+    if (result.imageVerdicts) {
+      persistentVerdicts = result.imageVerdicts;
+      // Populate Map for fast lookup
+      Object.keys(persistentVerdicts).forEach(key => {
+        srcVerdicts.set(key, persistentVerdicts[key]);
+      });
+    }
+  });
+} else {
+  console.warn('Chrome storage API not available');
+}
 
 function saveVerdict(key, isUnsafe) {
   if (!key) return;
@@ -75,6 +79,7 @@ async function ensureTfReady() {
     
     // Set WASM paths and backend
     try {
+      // Set WASM paths first
       if (tf.wasm && typeof tf.wasm.setWasmPaths === 'function') {
         tf.wasm.setWasmPaths(chrome.runtime.getURL('libs/'));
       }
@@ -89,8 +94,10 @@ async function ensureTfReady() {
     } catch (e) {
       console.warn('Failed to set WASM backend, attempting fallback to CPU', e);
       try {
-        await tf.setBackend('cpu');
-        console.log('TensorFlow.js backend set to CPU');
+        if (typeof tf.setBackend === 'function') {
+          await tf.setBackend('cpu');
+          console.log('TensorFlow.js backend set to CPU');
+        }
       } catch (cpuError) {
         console.error('Failed to set CPU backend', cpuError);
       }
@@ -105,6 +112,11 @@ async function ensureTfReady() {
 
 // Helper to run detection on an image element
 async function detect(imageElement) {
+  if (typeof tf === 'undefined') {
+    console.error('TensorFlow.js not loaded in detect function');
+    return [];
+  }
+  
   if (!model) await loadModel();
   if (!model) throw new Error('Model not loaded');
 
@@ -115,16 +127,28 @@ async function detect(imageElement) {
   
   try {
     // Create tensor from image
+    if (typeof tf.browser === 'undefined' || typeof tf.browser.fromPixels !== 'function') {
+      console.error('tf.browser.fromPixels not available');
+      return [];
+    }
     tensor = tf.browser.fromPixels(imageElement);
     
     // Resize to 320x320 (NudeNet default/optimized size)
     // bilinear interpolation is faster than bicubic
+    if (typeof tf.image === 'undefined' || typeof tf.image.resizeBilinear !== 'function') {
+      console.error('tf.image.resizeBilinear not available');
+      return [];
+    }
     resized = tf.image.resizeBilinear(tensor, [320, 320]);
     
     // Cast to float and expand dims to [1, 320, 320, 3]
     // resized is already float32 from resizeBilinear usually, but let's be safe
     
     // NudeNet expects 0-255 float inputs usually.
+    if (typeof resized.toFloat !== 'function') {
+      console.error('resized.toFloat not available, tensor type:', resized.constructor.name);
+      return [];
+    }
     expanded = resized.toFloat().expandDims(0);
     
     // Execute model
