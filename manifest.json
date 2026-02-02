@@ -18,7 +18,6 @@
     {
       "matches": ["https://*/*", "http://*/*"],
       "js": [
-        "libs/tf.min.js",
         "libs/tf-core.es2017.min.js",
         "libs/tf-converter.es2017.min.js",
         "libs/tf-backend-wasm.es2017.min.js",

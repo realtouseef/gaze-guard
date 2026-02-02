@@ -50,6 +50,7 @@ async function loadModel() {
       console.error('TensorFlow.js not loaded');
       return null;
     }
+    console.log('TFJS Version:', tf.version);
     
     await ensureTfReady();
     model = await tf.loadGraphModel(MODEL_URL);
@@ -77,34 +78,23 @@ async function ensureTfReady() {
     // Enable production mode for performance
     if (typeof tf.enableProdMode === 'function') tf.enableProdMode();
     
-    // Set WASM paths and backend
+    // Set backend
+    // Note: WASM in content scripts often fails due to CSP "unsafe-eval" or "wasm-eval" restrictions on host pages.
+    // We default to CPU for maximum compatibility/stability.
     try {
-      // Set WASM paths first
-      if (tf.wasm && typeof tf.wasm.setWasmPaths === 'function') {
-        tf.wasm.setWasmPaths(chrome.runtime.getURL('libs/'));
-      }
-      
-      // Explicitly set backend and wait
-      if (typeof tf.setBackend === 'function') {
-        await tf.setBackend('wasm');
-        console.log('TensorFlow.js backend set to WASM');
-      } else {
-        console.warn('tf.setBackend not available, skipping backend selection');
-      }
-    } catch (e) {
-      console.warn('Failed to set WASM backend, attempting fallback to CPU', e);
-      try {
-        if (typeof tf.setBackend === 'function') {
-          await tf.setBackend('cpu');
-          console.log('TensorFlow.js backend set to CPU');
-        }
-      } catch (cpuError) {
-        console.error('Failed to set CPU backend', cpuError);
-      }
+      await tf.setBackend('cpu');
+      console.log('TensorFlow.js backend set to CPU');
+    } catch (cpuError) {
+      console.error('Failed to set CPU backend', cpuError);
     }
+
 
     if (typeof tf.ready === 'function') {
       await tf.ready();
+    }
+    
+    if (typeof tf.getBackend === 'function') {
+        console.log('Current TF Backend:', tf.getBackend());
     }
   }
   backendReady = true;
@@ -131,7 +121,11 @@ async function detect(imageElement) {
       console.error('tf.browser.fromPixels not available');
       return [];
     }
-    tensor = tf.browser.fromPixels(imageElement);
+    let tensorRaw = tf.browser.fromPixels(imageElement);
+    if (tensorRaw instanceof Promise) {
+        tensorRaw = await tensorRaw;
+    }
+    tensor = tensorRaw;
     
     // Resize to 320x320 (NudeNet default/optimized size)
     // bilinear interpolation is faster than bicubic
@@ -140,6 +134,11 @@ async function detect(imageElement) {
       return [];
     }
     resized = tf.image.resizeBilinear(tensor, [320, 320]);
+    
+    // Handle potential async nature of resizeBilinear in some environments
+    if (resized instanceof Promise) {
+      resized = await resized;
+    }
     
     // Cast to float and expand dims to [1, 320, 320, 3]
     // resized is already float32 from resizeBilinear usually, but let's be safe
