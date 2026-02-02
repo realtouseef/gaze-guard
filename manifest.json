@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gaze Guard — Blur Inappropriate Images",
-  "version": "0.0.50",
+  "version": "0.0.54",
   "description": "A privacy-focused Chrome extension that uses on-device AI to detect and blur inappropriate images on web pages.",
   "permissions": [
     "activeTab",
@@ -9,8 +9,7 @@
   ],
   "host_permissions": [
     "https://*/*",
-    "http://*/*",
-    "https://nsfwjs.com/*"
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -18,7 +17,13 @@
   "content_scripts": [
     {
       "matches": ["https://*/*", "http://*/*"],
-      "js": ["libs/nsfwjs.min.js", "models/mobilenet_v2/model.min.js", "models/mobilenet_v2/group1-shard1of1.min.js", "content.js"],
+      "js": [
+        "libs/tf-core.es2017.min.js",
+        "libs/tf-converter.es2017.min.js",
+        "libs/tf-backend-wasm.es2017.min.js",
+        "libs/tf-backend-cpu.es2017.min.js",
+        "content.js"
+      ],
       "css": ["styles.css"],
       "run_at": "document_start",
       "all_frames": true,
@@ -42,11 +47,21 @@
     "128": "icons/icon128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://nsfwjs.com *"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' *"
   },
   "web_accessible_resources": [
     {
-      "resources": ["models/mobilenet_v2/model.min.js", "models/mobilenet_v2/group1-shard1of1.min.js"],
+      "resources": [
+        "models/nudenet/model.json",
+        "models/nudenet/group1-shard1of5.bin",
+        "models/nudenet/group1-shard2of5.bin",
+        "models/nudenet/group1-shard3of5.bin",
+        "models/nudenet/group1-shard4of5.bin",
+        "models/nudenet/group1-shard5of5.bin",
+        "libs/tfjs-backend-wasm.wasm",
+        "libs/tfjs-backend-wasm-simd.wasm",
+        "libs/tfjs-backend-wasm-threaded-simd.wasm"
+      ],
       "matches": ["https://*/*", "http://*/*"]
     }
   ]

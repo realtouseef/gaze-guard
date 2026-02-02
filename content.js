@@ -11,6 +11,12 @@ let isProcessing = false;
 let queueProcessingTimeout = null;
 let persistentVerdicts = {}; // Cache from storage
 
+// NudeNet Configuration
+const MODEL_URL = chrome.runtime.getURL('models/nudenet/model.json');
+// Classes based on default NudeNet model
+const NUDE_CLASSES = [2, 3, 4, 6, 14]; // Exposed parts (Buttocks, Breast, Genitalia, Anus)
+const SEXY_CLASSES = [0, 5, 13, 15, 16, 17]; // Covered parts/Suggestive (Belly, Covered Genitalia/Breast/Buttocks)
+
 // Load persistent cache immediately
 chrome.storage.local.get(['imageVerdicts'], (result) => {
   if (result.imageVerdicts) {
@@ -33,21 +39,221 @@ function saveVerdict(key, isUnsafe) {
   chrome.storage.local.set({ imageVerdicts: persistentVerdicts });
 }
 
-async function loadNSFWModel() {
+async function loadModel() {
   if (model) return model;
-  model = await nsfwjs.load('MobileNetV2', { size: 224 });
+  try {
+    if (typeof tf === 'undefined') {
+      console.error('TensorFlow.js not loaded');
+      return null;
+    }
+    
+    await ensureTfReady();
+    model = await tf.loadGraphModel(MODEL_URL);
+    
+    // Warmup
+    const dummy = tf.zeros([1, 320, 320, 3]);
+    const result = await model.executeAsync(dummy);
+    if (Array.isArray(result)) {
+      result.forEach(t => t.dispose());
+    } else {
+      result.dispose();
+    }
+    dummy.dispose();
+    
+    console.log('NudeNet model loaded');
+  } catch (e) {
+    console.error('Failed to load NudeNet model', e);
+  }
   return model;
 }
 
 async function ensureTfReady() {
   if (backendReady) return;
   if (typeof tf !== 'undefined') {
+    // Enable production mode for performance
     if (typeof tf.enableProdMode === 'function') tf.enableProdMode();
-    // Optimization: Allow tfjs to pick the best backend (webgl, wasm, etc)
-    // forcing 'cpu' is too slow for main thread.
+    
+    // Set WASM paths and backend
+    try {
+      if (tf.wasm && typeof tf.wasm.setWasmPaths === 'function') {
+        tf.wasm.setWasmPaths(chrome.runtime.getURL('libs/'));
+      }
+      
+      // Explicitly set backend and wait
+      if (typeof tf.setBackend === 'function') {
+        await tf.setBackend('wasm');
+        console.log('TensorFlow.js backend set to WASM');
+      } else {
+        console.warn('tf.setBackend not available, skipping backend selection');
+      }
+    } catch (e) {
+      console.warn('Failed to set WASM backend, attempting fallback to CPU', e);
+      try {
+        await tf.setBackend('cpu');
+        console.log('TensorFlow.js backend set to CPU');
+      } catch (cpuError) {
+        console.error('Failed to set CPU backend', cpuError);
+      }
+    }
+
+    if (typeof tf.ready === 'function') {
+      await tf.ready();
+    }
   }
   backendReady = true;
 }
+
+// Helper to run detection on an image element
+async function detect(imageElement) {
+  if (!model) await loadModel();
+  if (!model) throw new Error('Model not loaded');
+
+  let tensor = null;
+  let resized = null;
+  let expanded = null;
+  let predictions = null;
+  
+  try {
+    // Create tensor from image
+    tensor = tf.browser.fromPixels(imageElement);
+    
+    // Resize to 320x320 (NudeNet default/optimized size)
+    // bilinear interpolation is faster than bicubic
+    resized = tf.image.resizeBilinear(tensor, [320, 320]);
+    
+    // Cast to float and expand dims to [1, 320, 320, 3]
+    // resized is already float32 from resizeBilinear usually, but let's be safe
+    
+    // NudeNet expects 0-255 float inputs usually.
+    expanded = resized.toFloat().expandDims(0);
+    
+    // Execute model
+    predictions = await model.executeAsync(expanded);
+    
+    // Parse results
+    // Output depends on model. default-f16 usually has:
+    // [boxes, scores, classes] or similar order.
+    // We need to check the output tensors.
+    // Based on signature:
+    // output1: boxes (filtered_detections...TensorArrayGatherV3:0) [batch, 300, 4]
+    // output2: scores (filtered_detections...TensorArrayGatherV3:0) [batch, 300]
+    // output3: classes (filtered_detections...TensorArrayGatherV3:0) [batch, 300]
+    
+    // executeAsync returns array of tensors if multiple outputs.
+    // The order in the array matches the order in model.json 'outputs' if we don't specify names?
+    // Actually it's better to inspect the result.
+    
+    let boxesT, scoresT, classesT;
+    
+    if (Array.isArray(predictions)) {
+      // We need to identify which is which.
+      // Usually heuristics: shape [N, 300, 4] is boxes. [N, 300] is scores/classes.
+      // Classes are usually Int or Float (check values). Scores are 0-1.
+      
+      for (const t of predictions) {
+        const shape = t.shape;
+        if (shape.length === 3 && shape[2] === 4) {
+          boxesT = t;
+        } else if (shape.length === 2 && shape[1] === 300) {
+          // Could be scores or classes.
+          // We can check data later, or assume based on index if stable.
+          // Let's rely on checking data range or signature names if possible?
+          // TFJS executeAsync can return a map if we provide input map? No, it returns array or tensor.
+          // Let's store them and differentiate by values.
+        }
+      }
+      
+      // If we can't identify by shape (since scores and classes have same shape), we might need to rely on order.
+      // Signature order: output2 (scores), output1 (boxes), output3 (classes).
+      // BUT keys in JSON are unordered.
+      // However, usually the output array from executeAsync is sorted by output name string.
+      // output1 (boxes), output2 (scores), output3 (classes).
+      // Let's assume this for now.
+      
+      // Better heuristic:
+      // Boxes: [1, 300, 4]
+      // Scores: [1, 300], values 0..1
+      // Classes: [1, 300], values 0..17 (integers)
+      
+      // We will read data.
+    }
+    
+    // To be safe, let's just get the data and analyze.
+    const results = await Promise.all(predictions.map(t => t.data()));
+    
+    let scores, classes;
+    
+    // Find arrays
+    for (let i = 0; i < predictions.length; i++) {
+      const shape = predictions[i].shape;
+      const data = results[i];
+      
+      if (shape.length === 3 && shape[2] === 4) {
+        // Boxes, ignore
+      } else if (shape.length === 2 && shape[1] === 300) {
+        // Check if values look like probabilities (0-1) or classes (>1 possible)
+        // Classes are 0-17. Scores are 0-1.
+        // If we see value > 1, it's classes.
+        // If all values <= 1, it COULD be classes (0 or 1) or scores.
+        // But scores are usually floats. Classes are integers.
+        // Check if data is Int32Array (classes) or Float32Array (scores).
+        
+        if (data instanceof Int32Array || (data.some(v => v > 1.0))) {
+          classes = data;
+        } else {
+          scores = data;
+        }
+      }
+    }
+    
+    // Fallback if we couldn't identify (e.g. all classes are 0 or 1, and floats)
+    if (!classes && !scores && predictions.length >= 3) {
+        // Assume standard order: boxes, scores, classes (or similar)
+        // Actually, let's look at the signature names again.
+        // output1: boxes
+        // output2: scores
+        // output3: classes
+        // If sorted by name: output1, output2, output3.
+        // predictions[0] = boxes
+        // predictions[1] = scores
+        // predictions[2] = classes
+        
+        // Let's try this fallback.
+        if (predictions[1].shape[1] === 300) scores = results[1];
+        if (predictions[2].shape[1] === 300) classes = results[2];
+    }
+    
+    if (!scores || !classes) return [];
+    
+    const detected = [];
+    for (let i = 0; i < scores.length; i++) {
+      if (scores[i] > 0.4) { // Pre-filter low confidence
+        const cls = Math.round(classes[i]);
+        let className = null;
+        
+        if (NUDE_CLASSES.includes(cls)) className = 'Porn';
+        else if (SEXY_CLASSES.includes(cls)) className = 'Sexy';
+        
+        if (className) {
+           // Use Hentai as alias if needed, but for now map to Porn/Sexy
+           detected.push({ className, probability: scores[i] });
+        }
+      }
+    }
+    
+    return detected;
+
+  } finally {
+    if (tensor) tensor.dispose();
+    if (resized) resized.dispose();
+    if (expanded) expanded.dispose();
+    if (predictions) {
+       if (Array.isArray(predictions)) predictions.forEach(t => t.dispose());
+       else predictions.dispose();
+    }
+  }
+}
+
 
 function getElementKey(element) {
   if (element.tagName === 'IMG') {
@@ -301,10 +507,10 @@ function processQueue() {
     try {
       // Model should be preloaded, but ensure it here just in case
       await ensureTfReady();
-      if (!model) await loadNSFWModel();
+      if (!model) await loadModel();
       
       const BATCH_SIZE = 5; 
-      const TIMEOUT_MS = 3000;
+      const TIMEOUT_MS = 5000; // Increased timeout for NudeNet as it might be slower than MobileNet
 
       while (analysisQueue.length > 0) {
         // Process in batches
@@ -349,7 +555,7 @@ function processQueue() {
             const predictionPromise = new Promise(async (resolve, reject) => {
               const timer = setTimeout(() => reject(new Error('Classification Timeout')), TIMEOUT_MS);
               try {
-                const predictions = await model.classify(imageToClassify);
+                const predictions = await detect(imageToClassify);
                 clearTimeout(timer);
                 resolve(predictions);
               } catch (e) {
@@ -394,9 +600,6 @@ function processQueue() {
         }
       }
       
-      // Start cleanup interval
-      // Removed dangerous tf.disposeVariables() call which was likely wiping model weights.
-      // nsfwjs handles tensor cleanup internally.
     } catch (error) {
       console.error('Error in processQueue:', error);
     } finally { 
@@ -459,14 +662,6 @@ function findAllImages(root) {
     });
 
     // 2. Optimized Background Image Check & Shadow DOM
-    // We used to scan '*' but that is too expensive (O(N) on all DOM nodes).
-    // Instead, we only check elements that are likely to have background images or shadow roots if possible.
-    // For now, to ensure "native" smoothness, we SKIP the aggressive '*' scan.
-    // We can rely on specific checks or just accept that non-IMG tags with background images might be missed
-    // unless they are explicitly handled or we find a cheaper way.
-    
-    // If we MUST find shadow roots, we can try a TreeWalker, but even that is heavy.
-    // Compromise: Only scan for IFRAMEs to handle nested content, and skip the generic '*' scan.
     const iframes = container.querySelectorAll('iframe');
     iframes.forEach(el => {
       try {
@@ -478,9 +673,6 @@ function findAllImages(root) {
         // Cross-origin iframe, ignore
       }
     });
-
-    // Note: We are temporarily disabling deep Shadow DOM scanning and generic background image scanning
-    // via querySelectorAll('*') to restore browser performance.
   };
 
   // If root itself is an element, check it first
@@ -537,7 +729,6 @@ function scanImagesOnce() {
 
 function startScanning() {
   scanImagesOnce();
-  // Removed aggressive interval scanning to improve performance.
   // MutationObserver handles dynamic content updates.
 }
 
@@ -616,7 +807,7 @@ function start() {
 
   startScanning();
   observeDOM();
-  loadNSFWModel();
+  loadModel();
 
   loadSettings(() => {
     const hostname = location.hostname;
@@ -633,13 +824,11 @@ function start() {
 
     startScanning();
     observeDOM();
-    loadNSFWModel();
+    loadModel();
   });
 }
 
 if (!window.__gazeGuardInit) {
   window.__gazeGuardInit = true;
-  // Start immediately - do not wait for DOMContentLoaded
-  // Since we use document_start, document.body might not exist yet, but document.documentElement should
   start();
 }

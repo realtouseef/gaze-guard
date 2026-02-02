@@ -1,6 +1,6 @@
 {
   "name": "gaze-guard",
-  "version": "0.0.50",
+  "version": "0.0.54",
   "description": "A privacy-focused Chrome extension that uses on-device AI to detect and blur inappropriate images on web pages.",
   "main": "background.js",
   "scripts": {
@@ -31,7 +31,6 @@
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
-    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "nsfwjs": "^4.2.1"
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0"
   }
 }
